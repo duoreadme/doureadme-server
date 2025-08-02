@@ -71,7 +71,8 @@ async def root():
         "version": "2.0.0",
         "port": 5088,
         "endpoints": {
-            "search": "/search",
+            "search": "/search?keywords=python&limit=2",
+            "search_path": "/search/{domain}?limit=2",
             "health": "/health",
             "domains": "/domains",
             "docs": "/docs"
@@ -147,6 +148,24 @@ async def search_repositories(request: SearchRequest):
             
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+@app.get("/search")
+async def search_repositories_query(
+    keywords: str,
+    limit: int = 5
+):
+    """
+    Search endpoint using query parameters
+    
+    Args:
+        keywords: Keywords/topic to search for
+        limit: Maximum number of repositories (query parameter)
+        
+    Returns:
+        Search results
+    """
+    request = SearchRequest(domain=keywords, limit=limit)
+    return await search_repositories(request)
 
 @app.get("/search/{domain}")
 async def search_repositories_simple(
@@ -271,8 +290,9 @@ async def get_api_stats():
             "Sort by stars (descending)"
         ],
         "endpoints": {
-            "search": "POST /search - Full search with README",
-            "search_simple": "GET /search/{domain} - Simple search with README",
+            "search": "GET /search?keywords=python&limit=2 - Search with query parameters",
+            "search_post": "POST /search - Full search with README (request body)",
+            "search_path": "GET /search/{domain} - Simple search with path parameters",
             "search_fast": "GET /search/{domain}/no-readme - Fast search without README",
             "health": "GET /health - Health check",
             "domains": "GET /domains - Popular domains list",
