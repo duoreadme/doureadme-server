@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-GitHub README Searcher - Direct API Version
+GitHub API Searcher - Core search functionality
 
 This module provides a direct interface to GitHub API for searching repositories
 and retrieving README content without requiring MCP or Docker.
@@ -10,38 +9,32 @@ import asyncio
 import aiohttp
 import logging
 from typing import List, Optional
-from dataclasses import dataclass
 from urllib.parse import quote
 
+from app.core.models import RepositoryInfo
+from app.config.settings import settings
+
 # Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@dataclass
-class RepositoryInfo:
-    """Repository information"""
-    name: str
-    full_name: str
-    description: str
-    stars: int
-    language: str
-    url: str
-    readme_content: Optional[str] = None
 
 class GitHubAPISearcher:
     """GitHub API Searcher for finding repositories and retrieving README content"""
     
-    def __init__(self, github_token: str, github_host: str = "https://api.github.com"):
-        self.github_token = github_token
-        self.github_host = github_host.rstrip('/')
+    def __init__(self, github_token: Optional[str] = None, github_host: Optional[str] = None):
+        self.github_token = github_token or settings.GITHUB_TOKEN
+        self.github_host = (github_host or settings.GITHUB_HOST).rstrip('/')
         self.session = None
+        
+        if not self.github_token:
+            raise ValueError("GitHub token is required")
         
     async def __aenter__(self):
         """Async context manager entry"""
         headers = {
             'Authorization': f'token {self.github_token}',
             'Accept': 'application/vnd.github.v3+json',
-            'User-Agent': 'GitHub-README-Searcher/1.0'
+            'User-Agent': 'GitHub-README-Searcher/2.0.0'
         }
         
         self.session = aiohttp.ClientSession(headers=headers)
@@ -103,25 +96,20 @@ class GitHubAPISearcher:
                 
             page += 1
         
-        # Convert to RepositoryInfo objects and sort by stars (descending)
-        repositories = []
-        for repo in all_repos:
-            repo_info = RepositoryInfo(
+        # Convert to RepositoryInfo objects and limit results
+        repository_infos = []
+        for repo in all_repos[:limit]:
+            repository_info = RepositoryInfo(
                 name=repo['name'],
                 full_name=repo['full_name'],
                 description=repo.get('description', ''),
-                stars=repo['stargazers_count'],
+                stars=repo.get('stargazers_count', 0),
                 language=repo.get('language', 'Unknown'),
                 url=repo['html_url']
             )
-            repositories.append(repo_info)
+            repository_infos.append(repository_info)
         
-        # Sort by stars in descending order and take top N
-        repositories.sort(key=lambda x: x.stars, reverse=True)
-        repositories = repositories[:limit]
-        
-        logger.info(f"Found {len(repositories)} repositories for domain '{domain}'")
-        return repositories
+        return repository_infos
     
     async def get_readme_content(self, owner: str, repo: str) -> Optional[str]:
         """
@@ -134,32 +122,27 @@ class GitHubAPISearcher:
         Returns:
             README content as string, or None if not found
         """
-        # Try different README file names
-        readme_files = ['README.md', 'README.rst', 'README.txt', 'README']
+        url = f"{self.github_host}/repos/{owner}/{repo}/readme"
         
-        for readme_file in readme_files:
-            url = f"{self.github_host}/repos/{owner}/{repo}/contents/{readme_file}"
-            
-            try:
-                async with self.session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Get the download URL for the content
-                        download_url = data.get('download_url')
-                        if download_url:
-                            async with self.session.get(download_url) as content_response:
-                                if content_response.status == 200:
-                                    content = await content_response.text()
-                                    logger.info(f"Retrieved README for {owner}/{repo}")
-                                    return content
-                                    
-            except Exception as e:
-                logger.warning(f"Error getting README for {owner}/{repo}: {e}")
-                continue
-        
-        logger.warning(f"No README found for {owner}/{repo}")
-        return None
+        try:
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    content = data.get('content', '')
+                    encoding = data.get('encoding', 'base64')
+                    
+                    if encoding == 'base64':
+                        import base64
+                        return base64.b64decode(content).decode('utf-8')
+                    else:
+                        return content
+                else:
+                    logger.warning(f"Could not get README for {owner}/{repo}: {response.status}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error getting README for {owner}/{repo}: {e}")
+            return None
     
     async def search_and_get_readmes(self, domain: str, limit: int = 5) -> List[RepositoryInfo]:
         """
